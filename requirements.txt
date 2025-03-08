@@ -1,0 +1,12 @@
+fastapi~=0.115.8
+uvicorn~=0.34.0
+gitpython
+chromadb~=0.4.22
+openai~=1.65.1
+javalang
+plantuml
+
+pandas~=2.2.0
+sentence-transformers~=3.4.1
+pydantic~=2.10.6
+duckdb~=1.2.1
