@@ -189,3 +189,5 @@ build
 /src/frontend/node_modules/
 /src/backend/.chroma_storage/
 /src/backend/.repositories/
+
+.idea
