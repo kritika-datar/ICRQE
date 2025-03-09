@@ -1,28 +1,39 @@
-import os
+import asyncio
 import subprocess
-from pathlib import Path
+from pathlib import Path, PosixPath
 
 import chromadb
+import numpy as np
 import pandas as pd
 from chromadb.utils import embedding_functions
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sklearn.decomposition import PCA
+
 from plantuml_generator import PlantUMLGenerator
 from pydantic import BaseModel
 from qa_system import QAProcessor
 from repo_parser import RepositoryParser
 
-# Initialize ChromaDB and Model
+from concurrent.futures import ThreadPoolExecutor
+import pandas as pd
+
+# Initialize ChromaDB Client
+CHROMA_DB_PATH = "./.chroma_db"
 chroma_client = chromadb.PersistentClient(
-    path="./.chroma_db",
+    path=CHROMA_DB_PATH,
     settings=chromadb.Settings(
         is_persistent=True,
-        persist_directory="./chroma_storage",
+        persist_directory=CHROMA_DB_PATH,
         anonymized_telemetry=False,
+        allow_reset=False
     ),
 )
+
 embedding_function = embedding_functions.DefaultEmbeddingFunction()
+
+# Initialize FastAPI App
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -31,14 +42,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# Serve the diagrams directory
-app.mount(
-    "/diagrams",
-    StaticFiles(
-        directory="/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/ICRQE/diagrams"
-    ),
-    name="diagrams",
-)
+
+# Constants
+REPO_BASE_PATH = Path("./.repositories")
 
 
 class RepoInput(BaseModel):
@@ -52,111 +58,190 @@ class QuestionInput(BaseModel):
     openai_key: str
 
 
-def get_local_commit(repo_path):
-    """Get the latest local commit hash."""
+def get_commit_hash(repo_path, ref="HEAD"):
+    """Returns the latest commit hash for a given branch or HEAD."""
     try:
-        return (
-            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_path)
-            .strip()
-            .decode()
-        )
+        commit_hash = subprocess.check_output(
+            ["git", "-C", str(repo_path), "rev-parse", ref]
+        ).decode().strip()
+        return commit_hash
     except subprocess.CalledProcessError:
+        print(f"Warning: Could not retrieve commit hash for {ref}")
         return None
 
 
-def get_remote_commit(repo_path):
-    """Get the latest remote commit hash."""
+def get_remote_main_branch(repo_path):
+    """Finds the correct main branch (main/master) from the remote."""
     try:
-        subprocess.run(["git", "fetch", "origin"], cwd=repo_path, check=True)
-        return (
-            subprocess.check_output(["git", "rev-parse", f"origin/main"], cwd=repo_path)
-            .strip()
-            .decode()
-        )
+        branches = subprocess.check_output(
+            ["git", "-C", str(repo_path), "branch", "-r"]
+        ).decode().strip().split("\n")
+
+        branches = [b.strip() for b in branches]
+
+        if "origin/main" in branches:
+            return "origin/main"
+        elif "origin/master" in branches:
+            return "origin/master"
+        else:
+            print("Error: No main or master branch found in remote.")
+            return None
     except subprocess.CalledProcessError:
+        print("Error: Could not fetch remote branches.")
         return None
+
+
+def clone_or_update_repo(repo_url, repo_path):
+    """Clones the repository if it doesn't exist, otherwise updates it."""
+    if repo_path.is_dir() and (repo_path / ".git").is_dir():
+        print("Checking for updates...")
+
+        # Ensure we fetch the latest updates from the remote
+        subprocess.run(["git", "-C", repo_path, "fetch", "origin"], check=True)
+
+        # Detect the correct remote branch
+        remote_branch = get_remote_main_branch(repo_path)
+        if remote_branch is None:
+            return []
+
+        local_commit = get_commit_hash(repo_path)
+        remote_commit = get_commit_hash(repo_path, remote_branch)
+
+        if remote_commit is None:
+            print(f"Error: Could not retrieve remote commit for {remote_branch}.")
+            return []
+
+        if local_commit == remote_commit:
+            print("Repository is up to date.")
+            return []
+
+        print(f"Updating repository from {remote_branch}...")
+        subprocess.run(["git", "-C", repo_path, "pull", "origin", remote_branch.split('/')[-1]], check=True)
+
+        changed_files = (
+            subprocess.check_output(["git", "-C", repo_path, "diff", "--name-only", local_commit, remote_commit])
+            .decode()
+            .splitlines()
+        )
+        return changed_files
+    else:
+        print("Cloning repository...")
+        subprocess.run(["git", "clone", repo_url, str(repo_path)], check=True)
+        return None
+
+
+def validate_repo_metadata(repo_path):
+    """Validates if the repository metadata exists."""
+    parquet_path = repo_path / "embeddings.parquet"
+    if not parquet_path.exists():
+        raise HTTPException(status_code=500, detail="Repository metadata is missing.")
+    return parquet_path
+
+def reduce_embedding_size(embeddings, new_dim=128):
+    pca = PCA(n_components=new_dim)
+    return pca.fit_transform(np.array(embeddings))
+
+async def upsert_batch_async(collection, batch):
+    ids = batch["id"].tolist()
+    metadatas = batch.drop(columns=["code", "docstring", "parent"]).to_dict(orient="records")
+    documents = []
+    for _, row in batch.iterrows():
+        doc_text = f"{row['code']}\n"
+        if 'docstring' in row and row['docstring']:
+            doc_text += f"\nDocstring:\n{row['docstring']}\n"
+        if 'parent' in row and row['parent']:
+            doc_text += f"\nParent Class/Module: {row['parent']}\n"
+        documents.append(doc_text)
+    await asyncio.to_thread(collection.upsert, ids=ids, metadatas=metadatas, documents=documents)
+
+async def process_embeddings_async(repo_name, parquet_path, changed_files, batch_size=100):
+    df_embeddings = pd.read_parquet(parquet_path)
+    if df_embeddings.empty:
+        raise HTTPException(status_code=500, detail="No embeddings found.")
+
+    if changed_files:
+        df_embeddings = df_embeddings[df_embeddings["file_path"].isin(changed_files)]
+
+    collection = chroma_client.get_or_create_collection(repo_name, embedding_function=embedding_function)
+
+    tasks = []
+    for start in range(0, len(df_embeddings), batch_size):
+        end = min(start + batch_size, len(df_embeddings))
+        batch = df_embeddings.iloc[start:end]
+        tasks.append(upsert_batch_async(collection, batch))
+
+    await asyncio.gather(*tasks)
+
+
+def generate_diagrams(repo_path):
+    """Generates PlantUML diagrams for the repository and mounts them if available."""
+    diagram_generator = PlantUMLGenerator(repo_path)
+    diagrams = diagram_generator.generate_all()
+
+    diagram_path = repo_path / "diagrams"
+    if diagram_path.exists():
+        app.mount("/diagrams", StaticFiles(directory=str(diagram_path)), name="diagrams")
+
+    return diagrams
 
 
 @app.post("/process_repository/")
 def process_repository(input_data: RepoInput):
     repo_url = input_data.repo_url
+    repo_name = repo_url.split("/")[-1].replace(".git", "").replace("-", "_")
+    repo_path = REPO_BASE_PATH / repo_name
 
-    repo_name = repo_url.split("/")[-1].replace(".git", "")
-    repo_path = f"./.repositories/{repo_name}"
+    diagram_path = repo_path / "diagrams"
+    if diagram_path.exists():
+        app.mount("/diagrams", StaticFiles(directory=str(diagram_path)), name="diagrams")
 
-    # Clone or update the repository
-    if os.path.isdir(repo_path) and os.path.isdir(os.path.join(repo_path, ".git")):
-        print("Repository exists. Checking for updates...")
-        local_commit = get_local_commit(repo_path)
-        remote_commit = get_remote_commit(repo_path)
+    # Clone or update repository
+    changed_files = clone_or_update_repo(repo_url, repo_path)
+    if changed_files == []:
+        return {
+            "message": "Repository is up to date.",
+            "diagrams": {
+            'class':
+                repo_path /"diagrams/class_diagram.png",
+            'component': repo_path /"diagrams/component_diagram.png",
+            'sequence': repo_path /"diagrams/sequence_diagram.png"
+        }
+        }
 
-        if local_commit and remote_commit and local_commit != remote_commit:
-            print("New changes detected. Pulling latest updates...")
-            subprocess.run(["git", "-C", repo_path, "pull"], check=True)
-        else:
-            print("Already up to date.")
-    else:
-        subprocess.run(["git", "clone", repo_url, repo_path], check=True)
+    changed_files = None
 
-    # Parse repository for Java & Python code
-    parser = RepositoryParser(repo_path)
-    extraction_result = parser.extract_code_structure()
-
-    # Validate repository metadata
-    repo_path = Path(f"./.repositories/{repo_name}")
-    db_path = repo_path / "metadata.duckdb"
+    """Validates if the repository metadata exists."""
     parquet_path = repo_path / "embeddings.parquet"
+    if not parquet_path.exists():
+        # Parse repository
+        parser = RepositoryParser(repo_path)
+        parser.extract_code_structure(changed_files)
+        asyncio.run(process_embeddings_async(repo_name, parquet_path, changed_files))
+    else:
+        # Process embeddings
+        asyncio.run(process_embeddings_async(repo_name, parquet_path, changed_files))
 
-    if not db_path.exists() or not parquet_path.exists():
-        raise HTTPException(
-            status_code=500, detail="Failed to extract repository metadata."
-        )
+    # Generate diagrams
+    diagrams = generate_diagrams(repo_path)
 
-    # # Read embeddings from Parquet
-    df_embeddings = pd.read_parquet(parquet_path)
-    if df_embeddings.empty:
-        raise HTTPException(status_code=500, detail="No embeddings generated.")
-
-    # Add embeddings to ChromaDB
-    collection = chroma_client.get_or_create_collection(
-        repo_name, embedding_function=embedding_function
-    )
-
-    ids = df_embeddings["id"].tolist()
-    metadatas = df_embeddings.drop(columns=["code"]).to_dict(orient="records")
-    documents = df_embeddings["code"].tolist()
-
-    collection.add(ids=ids, metadatas=metadatas, documents=documents)
-
-    # Generate PlantUML diagrams
-    diagram_generator = PlantUMLGenerator(repo_path)
-    diagrams = diagram_generator.generate_all()
-
-    return {
-        "message": "Repository processed successfully",
-        "diagrams": diagrams,
-    }
+    return {"message": "Repository processed successfully", "diagrams": diagrams}
 
 
 @app.post("/ask_question/")
 def ask_question(input_data: QuestionInput):
     repo_name = input_data.repo_name.replace("-", "_")
+    repo_path = REPO_BASE_PATH / repo_name
 
     # Validate repository metadata
-    repo_path = Path(f"./.repositories/{repo_name}")
-    db_path = repo_path / "metadata.duckdb"
-    parquet_path = repo_path / "embeddings.parquet"
-
-    if not db_path.exists() or not parquet_path.exists():
-        raise HTTPException(status_code=404, detail="Repository metadata not found.")
+    validate_repo_metadata(repo_path)
 
     # Load ChromaDB collection
     collection = chroma_client.get_collection(repo_name)
     if not collection:
         raise HTTPException(status_code=404, detail="ChromaDB collection not found.")
 
-    # Initialize QA Processor
-    qa_processor = QAProcessor(collection, input_data.openai_key, db_path)
+    # Get answer from QAProcessor
+    qa_processor = QAProcessor(collection, input_data.openai_key, repo_path)
     answer = qa_processor.answer_question(input_data.question)
 
     return {"answer": answer}
@@ -164,5 +249,4 @@ def ask_question(input_data: QuestionInput):
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)

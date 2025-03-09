@@ -1,145 +1,144 @@
 import ast
+import re
 from pathlib import Path
-
-import duckdb
 import pandas as pd
-from sentence_transformers import SentenceTransformer
 
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")  # Small, fast model
-
-
-def _generate_embedding(code_snippet):
-    return (
-        embedding_model.encode(code_snippet).tolist() if code_snippet else [0.0] * 384
-    )
+SUPPORTED_EXTENSIONS = {".py", ".txt", ".yaml", ".yml", ".sh", ".md", ".toml", ".java", ".js", ".cpp", ".hpp", ".h", ".c", ".cs"}
 
 
-def _parse_python_file(file_path, code_data, embedding_data):
+def _parse_python_file(file_path, embedding_data):
+    """Extract classes and functions from a Python file using AST."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
         tree = ast.parse(code)
-        class_stack = []  # Track class nesting
+        class_stack = []
+
+        found_code = False
+
+        file_hash = hash(str(file_path))
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
+                found_code = True
                 class_stack.append(node.name)
-                code_data.append(
-                    {
-                        "name": node.name,
-                        "code": ast.unparse(node),
-                        "parent": None,
-                        "docstring": ast.get_docstring(node) or "",
-                        "start_line": node.lineno,
-                        "end_line": getattr(node, "end_lineno", None),
-                    }
-                )
                 embedding_data.append(
                     {
-                        "id": f"{node.name}_{file_path.stem}_{node.lineno}",
+                        "id": f"{node.name}_{file_path.stem}_{node.lineno}_{file_hash}",
                         "name": node.name,
                         "type": "class",
                         "file_path": str(file_path),
                         "start_line": node.lineno,
                         "end_line": getattr(node, "end_lineno", None),
                         "code": ast.unparse(node),
+                        "parent": None,
+                        "docstring": ast.get_docstring(node) or "",
                     }
                 )
 
             elif isinstance(node, ast.FunctionDef):
+                found_code = True
                 parent = class_stack[-1] if class_stack else None
-                code_data.append(
-                    {
-                        "name": node.name,
-                        "code": ast.unparse(node),
-                        "parent": parent,
-                        "docstring": ast.get_docstring(node) or "",
-                        "start_line": node.lineno,
-                        "end_line": getattr(node, "end_lineno", None),
-                    }
-                )
                 embedding_data.append(
                     {
-                        "id": f"{node.name}_{file_path.stem}_{node.lineno}",
+                        "id": f"{node.name}_{file_path.stem}_{node.lineno}_{file_hash}",
                         "name": node.name,
                         "type": "method" if parent else "function",
                         "file_path": str(file_path),
                         "start_line": node.lineno,
                         "end_line": getattr(node, "end_lineno", None),
                         "code": ast.unparse(node),
+                        "parent": parent,
+                        "docstring": ast.get_docstring(node) or "",
+                    }
+                )
+    except Exception as e:
+        print(f"Error parsing Python file {file_path}: {e}")
+
+
+def _parse_other_languages(file_path, embedding_data):
+    """Extracts class and function definitions using regex for Java, JavaScript, C++, and other languages."""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            code = f.read()
+
+        found_code = False
+
+        file_hash = hash(str(file_path))
+
+        class_pattern = re.compile(r'class\s+(\w+)\s*[{|:]')
+        function_pattern = re.compile(r'(public|private|protected)?\s*\w+[<>]*\s+(\w+)\s*\(.*\)\s*[{|;]')
+
+        for i, line in enumerate(code):
+            class_match = class_pattern.search(line)
+            function_match = function_pattern.search(line)
+
+            if class_match:
+                found_code = True
+                name = class_match.group(1)
+                embedding_data.append(
+                    {
+                        "id": f"{name}_{file_path.stem}_{i + 1}_{file_hash}",
+                        "name": name,
+                        "type": "class",
+                        "file_path": str(file_path),
+                        "start_line": i + 1,
+                        "end_line": None,
+                        "code": None,
+                        "parent": None,
+                        "docstring": "",
                     }
                 )
 
+            if function_match:
+                found_code = True
+                name = function_match.group(2)
+                embedding_data.append(
+                    {
+                        "id": f"{name}_{file_path.stem}_{i + 1}_{file_hash}",
+                        "name": name,
+                        "type": "function",
+                        "file_path": str(file_path),
+                        "start_line": i + 1,
+                        "end_line": None,
+                        "code": None,
+                        "parent": None,
+                        "docstring": "",
+                    }
+                )
     except Exception as e:
-        print(f"Error parsing Python file {file_path}: {e}")
+        print(f"Error parsing {file_path}: {e}")
 
 
 class RepositoryParser:
     def __init__(self, repo_path):
         self.repo_path = Path(repo_path)
-        self.db_path = self.repo_path / "metadata.duckdb"
         self.parquet_path = self.repo_path / "embeddings.parquet"
 
-        # Initialize DuckDB connection
-        self.conn = duckdb.connect(str(self.db_path))
-
-        # Ensure tables exist
-        self._init_db()
-
-    def _init_db(self):
-        """Initialize the DuckDB database schema."""
-        self.conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS code_metadata (
-                id INTEGER,  -- No auto-increment
-                name TEXT,
-                code TEXT,
-                parent TEXT,
-                docstring TEXT,
-                start_line INTEGER,
-                end_line INTEGER
-            )
-        """
-        )
-
-    def insert_metadata(self, metadata):
-        # Ensure all required columns exist
-        required_columns = [
-            "name",
-            "code",
-            "parent",
-            "docstring",
-            "start_line",
-            "end_line",
-        ]
-        for col in required_columns:
-            if col not in metadata.columns:
-                metadata[col] = None  # Fill missing columns with None
-
-        # Convert DataFrame to a list of tuples
-        data = list(metadata.itertuples(index=False, name=None))
-
-        # Insert into DuckDB
-        self.conn.executemany(
-            """
-            INSERT INTO code_metadata (name, code, parent, docstring, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            data,
-        )
-
-    def fetch_metadata(self):
-        """Fetch all stored metadata."""
-        return self.conn.execute("SELECT * FROM code_metadata").fetchall()
-
-    def extract_code_structure(self):
-        code_data = []
+    def extract_code_structure(self, changed_files=None):
         embedding_data = []
-        for file_path in self.repo_path.rglob("*.py"):
-            _parse_python_file(file_path, code_data, embedding_data)
-        df_metadata = pd.DataFrame(code_data)
-        if not df_metadata.empty:
-            self.insert_metadata(df_metadata)
-        df_embeddings = pd.DataFrame(embedding_data)
-        if not df_embeddings.empty:
+
+        # Determine files to process
+        if changed_files:
+            files_to_process = [self.repo_path / file for file in changed_files if file.endswith(".py")]
+        else:
+            files_to_process = list(self.repo_path.rglob("*.py"))
+
+        for file_path in files_to_process:
+            ext = file_path.suffix.lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                continue
+
+            if ext == ".py":
+                _parse_python_file(file_path, embedding_data)
+            # else:
+            #     _parse_other_languages(file_path, embedding_data)
+
+        # Save new embeddings if available
+        if embedding_data:
+            df_embeddings = pd.DataFrame(embedding_data)
             df_embeddings.to_parquet(self.parquet_path, index=False)
-        return {"code_metadata": df_metadata, "embedding_metadata": df_embeddings}
+        else:
+            df_embeddings = pd.DataFrame()
+
+        return {"embedding_metadata": df_embeddings}
