@@ -19,7 +19,7 @@ from repo_parser import RepositoryParser
 from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 
-# Initialize ChromaDB Client
+
 CHROMA_DB_PATH = "./.chroma_db"
 chroma_client = chromadb.PersistentClient(
     path=CHROMA_DB_PATH,
@@ -33,7 +33,7 @@ chroma_client = chromadb.PersistentClient(
 
 embedding_function = embedding_functions.DefaultEmbeddingFunction()
 
-# Initialize FastAPI App
+
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -43,7 +43,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Constants
+
 REPO_BASE_PATH = Path("./.repositories")
 
 
@@ -59,7 +59,6 @@ class QuestionInput(BaseModel):
 
 
 def get_commit_hash(repo_path, ref="HEAD"):
-    """Returns the latest commit hash for a given branch or HEAD."""
     try:
         commit_hash = subprocess.check_output(
             ["git", "-C", str(repo_path), "rev-parse", ref]
@@ -71,7 +70,6 @@ def get_commit_hash(repo_path, ref="HEAD"):
 
 
 def get_remote_main_branch(repo_path):
-    """Finds the correct main branch (main/master) from the remote."""
     try:
         branches = subprocess.check_output(
             ["git", "-C", str(repo_path), "branch", "-r"]
@@ -92,14 +90,13 @@ def get_remote_main_branch(repo_path):
 
 
 def clone_or_update_repo(repo_url, repo_path):
-    """Clones the repository if it doesn't exist, otherwise updates it."""
     if repo_path.is_dir() and (repo_path / ".git").is_dir():
         print("Checking for updates...")
 
-        # Ensure we fetch the latest updates from the remote
+
         subprocess.run(["git", "-C", repo_path, "fetch", "origin"], check=True)
 
-        # Detect the correct remote branch
+
         remote_branch = get_remote_main_branch(repo_path)
         if remote_branch is None:
             return []
@@ -131,7 +128,6 @@ def clone_or_update_repo(repo_url, repo_path):
 
 
 def validate_repo_metadata(repo_path):
-    """Validates if the repository metadata exists."""
     parquet_path = repo_path / "embeddings.parquet"
     if not parquet_path.exists():
         raise HTTPException(status_code=500, detail="Repository metadata is missing.")
@@ -174,7 +170,6 @@ async def process_embeddings_async(repo_name, parquet_path, changed_files, batch
 
 
 def generate_diagrams(repo_path):
-    """Generates PlantUML diagrams for the repository and mounts them if available."""
     diagram_generator = PlantUMLGenerator(repo_path)
     diagrams = diagram_generator.generate_all()
 
@@ -195,7 +190,7 @@ def process_repository(input_data: RepoInput):
     if diagram_path.exists():
         app.mount("/diagrams", StaticFiles(directory=str(diagram_path)), name="diagrams")
 
-    # Clone or update repository
+
     changed_files = clone_or_update_repo(repo_url, repo_path)
     if changed_files == []:
         return {
@@ -212,14 +207,14 @@ def process_repository(input_data: RepoInput):
 
     changed_files = None
 
-    """Validates if the repository metadata exists."""
+
     parquet_path = repo_path / "embeddings.parquet"
-    # Parse repository
+
     parser = RepositoryParser(repo_path)
     parser.extract_code_structure(changed_files)
     asyncio.run(process_embeddings_async(repo_name, parquet_path, changed_files))
 
-    # Generate diagrams
+
     diagrams = generate_diagrams(repo_path)
 
     return {"message": "Repository processed successfully", "diagrams": diagrams}
@@ -230,15 +225,15 @@ def ask_question(input_data: QuestionInput):
     repo_name = input_data.repo_name.replace("-", "_")
     repo_path = REPO_BASE_PATH / repo_name
 
-    # Validate repository metadata
+
     validate_repo_metadata(repo_path)
 
-    # Load ChromaDB collection
+
     collection = chroma_client.get_collection(repo_name)
     if not collection:
         raise HTTPException(status_code=404, detail="ChromaDB collection not found.")
 
-    # Get answer from QAProcessor
+
     qa_processor = QAProcessor(collection, input_data.openai_key, repo_path)
     answer = qa_processor.answer_question(input_data.question)
 

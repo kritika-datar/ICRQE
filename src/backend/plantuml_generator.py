@@ -7,7 +7,6 @@ from pathlib import Path
 
 
 def render_plantuml(puml_path):
-    """Renders a PlantUML diagram into a PNG file."""
     output_image_path = puml_path.with_suffix(".png")
     subprocess.run(["plantuml", "-tpng", str(puml_path)], check=True)
     return output_image_path
@@ -28,7 +27,6 @@ class PlantUMLGenerator:
         return diagrams
 
     def generate_class_diagram(self):
-        """Generates a class diagram based on Python classes found in the repository."""
         class_diagram_path = self.output_dir / "class_diagram.puml"
         classes = self.extract_classes()
 
@@ -44,7 +42,6 @@ class PlantUMLGenerator:
         return render_plantuml(class_diagram_path)
 
     def generate_sequence_diagram(self):
-        """Generates a sequence diagram showing function calls between classes."""
         sequence_diagram_path = self.output_dir / "sequence_diagram.puml"
         calls = self.extract_function_calls()
 
@@ -58,7 +55,6 @@ class PlantUMLGenerator:
         return render_plantuml(sequence_diagram_path)
 
     def generate_component_diagram(self):
-        """Generates a component diagram showing dependencies between modules."""
         component_diagram_path = self.output_dir / "component_diagram.puml"
         dependencies = self.extract_module_dependencies()
 
@@ -72,7 +68,6 @@ class PlantUMLGenerator:
         return render_plantuml(component_diagram_path)
 
     def extract_classes(self):
-        """Extracts class names and their methods from various programming language files."""
         classes = defaultdict(list)
         for file_path in self.repo_path.rglob("*.py"):
             ext = file_path.suffix.lower()
@@ -104,7 +99,6 @@ class PlantUMLGenerator:
         return classes
 
     def extract_function_calls(self):
-        """Extracts function calls between classes for sequence diagrams."""
         calls = defaultdict(set)
         for file_path in self.repo_path.rglob("*.py"):
             ext = file_path.suffix.lower()
@@ -134,7 +128,6 @@ class PlantUMLGenerator:
         return calls
 
     def extract_module_dependencies(self):
-        """Extracts module-level dependencies for component diagrams."""
         dependencies = defaultdict(set)
         for file_path in self.repo_path.rglob("*.py"):
             ext = file_path.suffix.lower()

@@ -7,7 +7,6 @@ SUPPORTED_EXTENSIONS = {".py", ".txt", ".yaml", ".yml", ".sh", ".md", ".toml", "
 
 
 def _parse_python_file(file_path, embedding_data):
-    """Extract classes and functions from a Python file using AST."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
@@ -57,7 +56,6 @@ def _parse_python_file(file_path, embedding_data):
 
 
 def _parse_other_languages(file_path, embedding_data):
-    """Extracts class and function definitions using regex for Java, JavaScript, C++, and other languages."""
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             code = f.read()
@@ -118,7 +116,6 @@ class RepositoryParser:
     def extract_code_structure(self, changed_files=None):
         embedding_data = []
 
-        # Determine files to process
         if changed_files:
             files_to_process = [self.repo_path / file for file in changed_files if file.endswith(".py")]
         else:
@@ -134,7 +131,6 @@ class RepositoryParser:
             # else:
             #     _parse_other_languages(file_path, embedding_data)
 
-        # Save new embeddings if available
         if embedding_data:
             df_embeddings = pd.DataFrame(embedding_data)
             df_embeddings.to_parquet(self.parquet_path, index=False)

@@ -12,15 +12,12 @@ class QAProcessor:
 
 
     def answer_question(self, question):
-        """Retrieve relevant context and answer a question.
-        Finds the most relevant code snippet based on user input."""
         query_embedding = embedding_model.encode(question).tolist()
 
         results = self.collection.query(
             query_embeddings=[query_embedding], n_results=3
         )
 
-        # Extract relevant metadata & documents safely
         metadata_list = results.get("metadatas", [[]])
         metadata_flat = [
             meta for sublist in metadata_list for meta in sublist if meta
@@ -31,7 +28,6 @@ class QAProcessor:
             doc for sublist in documents for doc in sublist if doc
         ]
 
-        # Ensure we have valid extracted data
         if metadata_flat and documents_flat:
             context_snippets = []
             for meta, doc in zip(metadata_flat, documents_flat):
@@ -45,7 +41,6 @@ class QAProcessor:
         else:
             context_str = "No relevant context found."
 
-        # Query OpenAI with proper repository context
         response = self.client.chat.completions.create(
             model="gpt-4",
             messages=[
