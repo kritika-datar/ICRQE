@@ -201,10 +201,12 @@ def process_repository(input_data: RepoInput):
         return {
             "message": "Repository is up to date.",
             "diagrams": {
-            'class':
-                repo_path /"diagrams/class_diagram.png",
-            'component': repo_path /"diagrams/component_diagram.png",
-            'sequence': repo_path /"diagrams/sequence_diagram.png"
+            'class': PosixPath(
+                f'/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/class_diagram.png'),
+            'component': PosixPath(
+                f'/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/component_diagram.png'),
+            'sequence': PosixPath(
+                f'/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/sequence_diagram.png')
         }
         }
 
@@ -212,14 +214,10 @@ def process_repository(input_data: RepoInput):
 
     """Validates if the repository metadata exists."""
     parquet_path = repo_path / "embeddings.parquet"
-    if not parquet_path.exists():
-        # Parse repository
-        parser = RepositoryParser(repo_path)
-        parser.extract_code_structure(changed_files)
-        asyncio.run(process_embeddings_async(repo_name, parquet_path, changed_files))
-    else:
-        # Process embeddings
-        asyncio.run(process_embeddings_async(repo_name, parquet_path, changed_files))
+    # Parse repository
+    parser = RepositoryParser(repo_path)
+    parser.extract_code_structure(changed_files)
+    asyncio.run(process_embeddings_async(repo_name, parquet_path, changed_files))
 
     # Generate diagrams
     diagrams = generate_diagrams(repo_path)
