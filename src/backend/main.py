@@ -3,16 +3,27 @@ import subprocess
 from pathlib import Path
 
 import pandas as pd
-from chromadb import PersistentClient
+import chromadb
+from chromadb.utils import embedding_functions
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sentence_transformers import SentenceTransformer
+from fastapi.staticfiles import StaticFiles
 
 from plantuml_generator import PlantUMLGenerator  # Custom module for diagrams
 from pydantic import BaseModel
 from qa_system import QAProcessor  # Custom module for Q&A using OpenAI API
 from repo_parser import RepositoryParser  # Custom module for parsing Java/Python code
+from sentence_transformers import SentenceTransformer
 
+# Initialize ChromaDB and Model
+chroma_client = chromadb.PersistentClient(path="./.chroma_db",
+settings=chromadb.Settings(
+        is_persistent=True,  # Ensure persistence
+        persist_directory="./chroma_storage",  # Folder where Parquet files will be stored
+        anonymized_telemetry=False
+    )
+                                          )
+embedding_function = embedding_functions.DefaultEmbeddingFunction()
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -21,28 +32,62 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Initialize ChromaDB and Model
-chroma_client = PersistentClient(path="./.chroma_storage")
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")  # Fast and efficient
-
+# Serve the diagrams directory
+app.mount("/diagrams", StaticFiles(directory="/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/ICRQE/diagrams"), name="diagrams")
 
 class RepoInput(BaseModel):
     repo_url: str
     openai_key: str
 
+class QuestionInput(BaseModel):
+    question: str
+    repo_name: str
+    openai_key: str
+
+
+def get_local_commit(repo_path):
+    """Get the latest local commit hash."""
+    try:
+        return (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_path)
+            .strip()
+            .decode()
+        )
+    except subprocess.CalledProcessError:
+        return None
+
+
+def get_remote_commit(repo_path):
+    """Get the latest remote commit hash."""
+    try:
+        subprocess.run(["git", "fetch", "origin"], cwd=repo_path, check=True)
+        return (
+            subprocess.check_output(["git", "rev-parse", f"origin/main"], cwd=repo_path)
+            .strip()
+            .decode()
+        )
+    except subprocess.CalledProcessError:
+        return None
+
 
 @app.post("/process_repository/")
 def process_repository(input_data: RepoInput):
     repo_url = input_data.repo_url
-    openai_key = input_data.openai_key
 
     repo_name = repo_url.split("/")[-1].replace(".git", "")
     repo_path = f"./.repositories/{repo_name}"
 
     # Clone or update the repository
-    if os.path.exists(repo_path):
-        subprocess.run(["git", "-C", repo_path, "pull"], check=True)
+    if os.path.isdir(repo_path) and os.path.isdir(os.path.join(repo_path, ".git")):
+        print("Repository exists. Checking for updates...")
+        local_commit = get_local_commit(repo_path)
+        remote_commit = get_remote_commit(repo_path)
+
+        if local_commit and remote_commit and local_commit != remote_commit:
+            print("New changes detected. Pulling latest updates...")
+            subprocess.run(["git", "-C", repo_path, "pull"], check=True)
+        else:
+            print("Already up to date.")
     else:
         subprocess.run(["git", "clone", repo_url, repo_path], check=True)
 
@@ -51,7 +96,7 @@ def process_repository(input_data: RepoInput):
     extraction_result = parser.extract_code_structure()
 
     # Validate repository metadata
-    repo_path = Path(f"./repositories/{repo_name}")
+    repo_path = Path(f"./.repositories/{repo_name}")
     db_path = repo_path / "metadata.duckdb"
     parquet_path = repo_path / "embeddings.parquet"
 
@@ -60,34 +105,24 @@ def process_repository(input_data: RepoInput):
             status_code=500, detail="Failed to extract repository metadata."
         )
 
-    # Read embeddings from Parquet
+    # # Read embeddings from Parquet
     df_embeddings = pd.read_parquet(parquet_path)
     if df_embeddings.empty:
         raise HTTPException(status_code=500, detail="No embeddings generated.")
 
     # Add embeddings to ChromaDB
-    collection = chroma_client.get_or_create_collection(repo_name)
-
-    # Ensure unique IDs by appending file path and line number
-    df_embeddings["unique_id"] = df_embeddings.apply(
-        lambda row: f"{row['id']}_{row['file_path'].replace('/', '_')}_{row['start_line']}",
-        axis=1,
+    collection = chroma_client.get_or_create_collection(
+        repo_name, embedding_function=embedding_function
     )
 
+    ids = df_embeddings["id"].tolist()
+    metadatas = df_embeddings.drop(columns=["code"]).to_dict(orient="records")
+    documents = df_embeddings["code"].tolist()
+
     collection.add(
-        ids=df_embeddings["unique_id"].astype(str).tolist(),  # Use unique ID
-        embeddings=df_embeddings["embedding"].apply(lambda x: x.tolist()).tolist(),
-        metadatas=[
-            {
-                "repo_name": repo_name,
-                "file_path": row["file_path"],
-                "artifact_type": row["type"],
-                "artifact_name": row["name"],
-                "docstring": row["docstring"],
-                "code": row["code"],
-                "id": row["id"]
-            } for _, row in df_embeddings.iterrows()
-        ]
+        ids=ids,
+        metadatas=metadatas,
+        documents=documents
     )
 
     # Generate PlantUML diagrams
@@ -96,24 +131,15 @@ def process_repository(input_data: RepoInput):
 
     return {
         "message": "Repository processed successfully",
-        "metadata_count": extraction_result["metadata_count"],
-        "embeddings_count": extraction_result["embeddings_count"],
         "diagrams": diagrams,
     }
-
-
-class QuestionInput(BaseModel):
-    question: str
-    repo_name: str
-    openai_key: str
-
 
 @app.post("/ask_question/")
 def ask_question(input_data: QuestionInput):
     repo_name = input_data.repo_name.replace("-", "_")
 
     # Validate repository metadata
-    repo_path = Path(f"./repositories/{repo_name}")
+    repo_path = Path(f"./.repositories/{repo_name}")
     db_path = repo_path / "metadata.duckdb"
     parquet_path = repo_path / "embeddings.parquet"
 
