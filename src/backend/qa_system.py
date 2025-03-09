@@ -51,10 +51,14 @@ class QAProcessor:
 
         # ✅ Extract relevant metadata & documents safely
         metadata_list = results.get("metadatas", [[]])  # Ensure list exists
-        metadata_flat = [meta for sublist in metadata_list for meta in sublist if meta]  # Flatten
+        metadata_flat = [
+            meta for sublist in metadata_list for meta in sublist if meta
+        ]  # Flatten
 
         documents = results.get("documents", [[]])  # Extract documents (list of lists)
-        documents_flat = [doc for sublist in documents for doc in sublist if doc]  # Flatten
+        documents_flat = [
+            doc for sublist in documents for doc in sublist if doc
+        ]  # Flatten
 
         # 🟢 Ensure we have valid extracted data
         if metadata_flat and documents_flat:
@@ -84,9 +88,9 @@ class QAProcessor:
                 {
                     "role": "user",
                     "content": f"Repository Context:\n{context_str}\n\n"
-                               f"Answer the following question based on the repository content above:\n"
-                               f"{question}\n\n"
-                               "If you do not find an exact match, try to infer based on related code structures.",
+                    f"Answer the following question based on the repository content above:\n"
+                    f"{question}\n\n"
+                    "If you do not find an exact match, try to infer based on related code structures.",
                 },
             ],
         )

@@ -2,27 +2,26 @@ import os
 import subprocess
 from pathlib import Path
 
-import pandas as pd
 import chromadb
+import pandas as pd
 from chromadb.utils import embedding_functions
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-
-from plantuml_generator import PlantUMLGenerator  # Custom module for diagrams
+from plantuml_generator import PlantUMLGenerator
 from pydantic import BaseModel
-from qa_system import QAProcessor  # Custom module for Q&A using OpenAI API
-from repo_parser import RepositoryParser  # Custom module for parsing Java/Python code
-from sentence_transformers import SentenceTransformer
+from qa_system import QAProcessor
+from repo_parser import RepositoryParser
 
 # Initialize ChromaDB and Model
-chroma_client = chromadb.PersistentClient(path="./.chroma_db",
-settings=chromadb.Settings(
-        is_persistent=True,  # Ensure persistence
-        persist_directory="./chroma_storage",  # Folder where Parquet files will be stored
-        anonymized_telemetry=False
-    )
-                                          )
+chroma_client = chromadb.PersistentClient(
+    path="./.chroma_db",
+    settings=chromadb.Settings(
+        is_persistent=True,
+        persist_directory="./chroma_storage",
+        anonymized_telemetry=False,
+    ),
+)
 embedding_function = embedding_functions.DefaultEmbeddingFunction()
 app = FastAPI()
 app.add_middleware(
@@ -33,11 +32,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # Serve the diagrams directory
-app.mount("/diagrams", StaticFiles(directory="/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/ICRQE/diagrams"), name="diagrams")
+app.mount(
+    "/diagrams",
+    StaticFiles(
+        directory="/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/ICRQE/diagrams"
+    ),
+    name="diagrams",
+)
+
 
 class RepoInput(BaseModel):
     repo_url: str
     openai_key: str
+
 
 class QuestionInput(BaseModel):
     question: str
@@ -119,11 +126,7 @@ def process_repository(input_data: RepoInput):
     metadatas = df_embeddings.drop(columns=["code"]).to_dict(orient="records")
     documents = df_embeddings["code"].tolist()
 
-    collection.add(
-        ids=ids,
-        metadatas=metadatas,
-        documents=documents
-    )
+    collection.add(ids=ids, metadatas=metadatas, documents=documents)
 
     # Generate PlantUML diagrams
     diagram_generator = PlantUMLGenerator(repo_path)
@@ -133,6 +136,7 @@ def process_repository(input_data: RepoInput):
         "message": "Repository processed successfully",
         "diagrams": diagrams,
     }
+
 
 @app.post("/ask_question/")
 def ask_question(input_data: QuestionInput):

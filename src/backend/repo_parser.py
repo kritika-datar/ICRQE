@@ -24,47 +24,54 @@ def _parse_python_file(file_path, code_data, embedding_data):
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 class_stack.append(node.name)
-                code_data.append({
-                    "name": node.name,
-                    "code": ast.unparse(node),
-                    "parent": None,
-                    "docstring": ast.get_docstring(node) or "",
-                    "start_line": node.lineno,
-                    "end_line": getattr(node, "end_lineno", None),
-                })
-                embedding_data.append({
-                    "id": f"{node.name}_{file_path.stem}_{node.lineno}",
-                    "name": node.name,
-                    "type": "class",
-                    "file_path": str(file_path),
-                    "start_line": node.lineno,
-                    "end_line": getattr(node, "end_lineno", None),
-                    "code": ast.unparse(node),
-                })
+                code_data.append(
+                    {
+                        "name": node.name,
+                        "code": ast.unparse(node),
+                        "parent": None,
+                        "docstring": ast.get_docstring(node) or "",
+                        "start_line": node.lineno,
+                        "end_line": getattr(node, "end_lineno", None),
+                    }
+                )
+                embedding_data.append(
+                    {
+                        "id": f"{node.name}_{file_path.stem}_{node.lineno}",
+                        "name": node.name,
+                        "type": "class",
+                        "file_path": str(file_path),
+                        "start_line": node.lineno,
+                        "end_line": getattr(node, "end_lineno", None),
+                        "code": ast.unparse(node),
+                    }
+                )
 
             elif isinstance(node, ast.FunctionDef):
                 parent = class_stack[-1] if class_stack else None
-                code_data.append({
-                    "name": node.name,
-                    "code": ast.unparse(node),
-                    "parent": parent,
-                    "docstring": ast.get_docstring(node) or "",
-                    "start_line": node.lineno,
-                    "end_line": getattr(node, "end_lineno", None),
-                })
-                embedding_data.append({
-                    "id": f"{node.name}_{file_path.stem}_{node.lineno}",
-                    "name": node.name,
-                    "type": "method" if parent else "function",
-                    "file_path": str(file_path),
-                    "start_line": node.lineno,
-                    "end_line": getattr(node, "end_lineno", None),
-                    "code": ast.unparse(node),
-                })
+                code_data.append(
+                    {
+                        "name": node.name,
+                        "code": ast.unparse(node),
+                        "parent": parent,
+                        "docstring": ast.get_docstring(node) or "",
+                        "start_line": node.lineno,
+                        "end_line": getattr(node, "end_lineno", None),
+                    }
+                )
+                embedding_data.append(
+                    {
+                        "id": f"{node.name}_{file_path.stem}_{node.lineno}",
+                        "name": node.name,
+                        "type": "method" if parent else "function",
+                        "file_path": str(file_path),
+                        "start_line": node.lineno,
+                        "end_line": getattr(node, "end_lineno", None),
+                        "code": ast.unparse(node),
+                    }
+                )
 
     except Exception as e:
         print(f"Error parsing Python file {file_path}: {e}")
-
 
 
 class RepositoryParser:
@@ -97,7 +104,14 @@ class RepositoryParser:
 
     def insert_metadata(self, metadata):
         # Ensure all required columns exist
-        required_columns = ["name", "code", "parent", "docstring", "start_line", "end_line"]
+        required_columns = [
+            "name",
+            "code",
+            "parent",
+            "docstring",
+            "start_line",
+            "end_line",
+        ]
         for col in required_columns:
             if col not in metadata.columns:
                 metadata[col] = None  # Fill missing columns with None
@@ -128,7 +142,4 @@ class RepositoryParser:
         df_embeddings = pd.DataFrame(embedding_data)
         if not df_embeddings.empty:
             df_embeddings.to_parquet(self.parquet_path, index=False)
-        return {
-            "code_metadata": df_metadata,
-            "embedding_metadata": df_embeddings
-        }
+        return {"code_metadata": df_metadata, "embedding_metadata": df_embeddings}

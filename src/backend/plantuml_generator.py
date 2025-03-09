@@ -1,8 +1,16 @@
-import os
 import ast
+import os
 import subprocess
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
+
+
+def render_plantuml(puml_path):
+    """Renders a PlantUML diagram into a PNG file."""
+    output_image_path = puml_path.with_suffix(".png")
+    subprocess.run(["plantuml", "-tpng", str(puml_path)], check=True)
+    return output_image_path
+
 
 class PlantUMLGenerator:
     def __init__(self, repo_path):
@@ -32,7 +40,7 @@ class PlantUMLGenerator:
                 f.write("}\n")
             f.write("@enduml\n")
 
-        return self.render_plantuml(class_diagram_path)
+        return render_plantuml(class_diagram_path)
 
     def generate_sequence_diagram(self):
         """Generates a sequence diagram showing function calls between classes."""
@@ -46,7 +54,7 @@ class PlantUMLGenerator:
                     f.write(f"{caller} -> {callee}: calls\n")
             f.write("@enduml\n")
 
-        return self.render_plantuml(sequence_diagram_path)
+        return render_plantuml(sequence_diagram_path)
 
     def generate_component_diagram(self):
         """Generates a component diagram showing dependencies between modules."""
@@ -60,13 +68,7 @@ class PlantUMLGenerator:
                     f.write(f"[{module}] --> [{imp}]\n")
             f.write("@enduml\n")
 
-        return self.render_plantuml(component_diagram_path)
-
-    def render_plantuml(self, puml_path):
-        """Renders a PlantUML diagram into a PNG file."""
-        output_image_path = puml_path.with_suffix(".png")
-        subprocess.run(["plantuml", "-tpng", str(puml_path)], check=True)
-        return output_image_path
+        return render_plantuml(component_diagram_path)
 
     def extract_classes(self):
         """Extracts class names and their methods from Python files."""
@@ -79,7 +81,9 @@ class PlantUMLGenerator:
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ClassDef):
                         class_name = node.name
-                        methods = [n.name for n in node.body if isinstance(n, ast.FunctionDef)]
+                        methods = [
+                            n.name for n in node.body if isinstance(n, ast.FunctionDef)
+                        ]
                         classes[class_name].extend(methods)
             except Exception as e:
                 print(f"Error parsing {file_path}: {e}")
@@ -101,9 +105,13 @@ class PlantUMLGenerator:
                     elif isinstance(node, ast.FunctionDef):
                         function_name = node.name
                         for stmt in ast.walk(node):
-                            if isinstance(stmt, ast.Call) and isinstance(stmt.func, ast.Attribute):
+                            if isinstance(stmt, ast.Call) and isinstance(
+                                stmt.func, ast.Attribute
+                            ):
                                 called_method = stmt.func.attr
-                                calls[f"{current_class}.{function_name}"].add(called_method)
+                                calls[f"{current_class}.{function_name}"].add(
+                                    called_method
+                                )
             except Exception as e:
                 print(f"Error parsing {file_path}: {e}")
 
