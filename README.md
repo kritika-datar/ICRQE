@@ -20,3 +20,12 @@ requirements of a developer and a team are met. This platform will provide users
 interact with the code in a user-friendly way, giving insights of the technical part of the
 code and also eventually provide suggestions to improve the code and thus make the
 overall delivery process smoother.
+
+To run the Application:
+1. Install requirements from requirements.txt
+2. Create directories .repositories and .chroma_db under the backend folder
+3. For UI, Install npm and setup react -  npx create-react-app frontend, cd frontend, npm install axios, npm start 
+4. To run this project you need and Open AI key. 
+5. For running the project pass any python repository url to the text box. And click on Process repository
+6. It will generate embeddings and diagrams.
+7. Next ask any question relevant to the repository in the text box
