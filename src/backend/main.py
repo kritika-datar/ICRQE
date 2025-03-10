@@ -1,5 +1,6 @@
 import asyncio
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PosixPath
 
 import chromadb
@@ -9,16 +10,11 @@ from chromadb.utils import embedding_functions
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sklearn.decomposition import PCA
-
 from plantuml_generator import PlantUMLGenerator
 from pydantic import BaseModel
 from qa_system import QAProcessor
 from repo_parser import RepositoryParser
-
-from concurrent.futures import ThreadPoolExecutor
-import pandas as pd
-
+from sklearn.decomposition import PCA
 
 CHROMA_DB_PATH = "./.chroma_db"
 chroma_client = chromadb.PersistentClient(
@@ -27,7 +23,7 @@ chroma_client = chromadb.PersistentClient(
         is_persistent=True,
         persist_directory=CHROMA_DB_PATH,
         anonymized_telemetry=False,
-        allow_reset=False
+        allow_reset=False,
     ),
 )
 
@@ -60,9 +56,11 @@ class QuestionInput(BaseModel):
 
 def get_commit_hash(repo_path, ref="HEAD"):
     try:
-        commit_hash = subprocess.check_output(
-            ["git", "-C", str(repo_path), "rev-parse", ref]
-        ).decode().strip()
+        commit_hash = (
+            subprocess.check_output(["git", "-C", str(repo_path), "rev-parse", ref])
+            .decode()
+            .strip()
+        )
         return commit_hash
     except subprocess.CalledProcessError:
         print(f"Warning: Could not retrieve commit hash for {ref}")
@@ -71,9 +69,12 @@ def get_commit_hash(repo_path, ref="HEAD"):
 
 def get_remote_main_branch(repo_path):
     try:
-        branches = subprocess.check_output(
-            ["git", "-C", str(repo_path), "branch", "-r"]
-        ).decode().strip().split("\n")
+        branches = (
+            subprocess.check_output(["git", "-C", str(repo_path), "branch", "-r"])
+            .decode()
+            .strip()
+            .split("\n")
+        )
 
         branches = [b.strip() for b in branches]
 
@@ -93,9 +94,7 @@ def clone_or_update_repo(repo_url, repo_path):
     if repo_path.is_dir() and (repo_path / ".git").is_dir():
         print("Checking for updates...")
 
-
         subprocess.run(["git", "-C", repo_path, "fetch", "origin"], check=True)
-
 
         remote_branch = get_remote_main_branch(repo_path)
         if remote_branch is None:
@@ -113,10 +112,23 @@ def clone_or_update_repo(repo_url, repo_path):
             return []
 
         print(f"Updating repository from {remote_branch}...")
-        subprocess.run(["git", "-C", repo_path, "pull", "origin", remote_branch.split('/')[-1]], check=True)
+        subprocess.run(
+            ["git", "-C", repo_path, "pull", "origin", remote_branch.split("/")[-1]],
+            check=True,
+        )
 
         changed_files = (
-            subprocess.check_output(["git", "-C", repo_path, "diff", "--name-only", local_commit, remote_commit])
+            subprocess.check_output(
+                [
+                    "git",
+                    "-C",
+                    repo_path,
+                    "diff",
+                    "--name-only",
+                    local_commit,
+                    remote_commit,
+                ]
+            )
             .decode()
             .splitlines()
         )
@@ -133,24 +145,33 @@ def validate_repo_metadata(repo_path):
         raise HTTPException(status_code=500, detail="Repository metadata is missing.")
     return parquet_path
 
+
 def reduce_embedding_size(embeddings, new_dim=128):
     pca = PCA(n_components=new_dim)
     return pca.fit_transform(np.array(embeddings))
 
+
 async def upsert_batch_async(collection, batch):
     ids = batch["id"].tolist()
-    metadatas = batch.drop(columns=["code", "docstring", "parent"]).to_dict(orient="records")
+    metadatas = batch.drop(columns=["code", "docstring", "parent"]).to_dict(
+        orient="records"
+    )
     documents = []
     for _, row in batch.iterrows():
         doc_text = f"{row['code']}\n"
-        if 'docstring' in row and row['docstring']:
+        if "docstring" in row and row["docstring"]:
             doc_text += f"\nDocstring:\n{row['docstring']}\n"
-        if 'parent' in row and row['parent']:
+        if "parent" in row and row["parent"]:
             doc_text += f"\nParent Class/Module: {row['parent']}\n"
         documents.append(doc_text)
-    await asyncio.to_thread(collection.upsert, ids=ids, metadatas=metadatas, documents=documents)
+    await asyncio.to_thread(
+        collection.upsert, ids=ids, metadatas=metadatas, documents=documents
+    )
 
-async def process_embeddings_async(repo_name, parquet_path, changed_files, batch_size=100):
+
+async def process_embeddings_async(
+    repo_name, parquet_path, changed_files, batch_size=100
+):
     df_embeddings = pd.read_parquet(parquet_path)
     if df_embeddings.empty:
         raise HTTPException(status_code=500, detail="No embeddings found.")
@@ -158,7 +179,9 @@ async def process_embeddings_async(repo_name, parquet_path, changed_files, batch
     if changed_files:
         df_embeddings = df_embeddings[df_embeddings["file_path"].isin(changed_files)]
 
-    collection = chroma_client.get_or_create_collection(repo_name, embedding_function=embedding_function)
+    collection = chroma_client.get_or_create_collection(
+        repo_name, embedding_function=embedding_function
+    )
 
     tasks = []
     for start in range(0, len(df_embeddings), batch_size):
@@ -175,7 +198,9 @@ def generate_diagrams(repo_path):
 
     diagram_path = repo_path / "diagrams"
     if diagram_path.exists():
-        app.mount("/diagrams", StaticFiles(directory=str(diagram_path)), name="diagrams")
+        app.mount(
+            "/diagrams", StaticFiles(directory=str(diagram_path)), name="diagrams"
+        )
 
     return diagrams
 
@@ -188,32 +213,43 @@ def process_repository(input_data: RepoInput):
 
     diagram_path = repo_path / "diagrams"
     if diagram_path.exists():
-        app.mount("/diagrams", StaticFiles(directory=str(diagram_path)), name="diagrams")
-
+        app.mount(
+            "/diagrams", StaticFiles(directory=str(diagram_path)), name="diagrams"
+        )
 
     changed_files = clone_or_update_repo(repo_url, repo_path)
     if changed_files == []:
         return {
             "message": "Repository is up to date.",
             "diagrams": {
-            'class': PosixPath(
-                f'/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/class_diagram.png'),
-            'component': PosixPath(
-                f'/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/component_diagram.png'),
-            'sequence': PosixPath(
-                f'/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/sequence_diagram.png')
-        }
+                "class": PosixPath(
+                    f"/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/class_diagram.png"
+                ),
+                "component": PosixPath(
+                    f"/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/component_diagram.png"
+                ),
+                "sequence": PosixPath(
+                    f"/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/sequence_diagram.png"
+                ),
+                "context": PosixPath(
+                    f"/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/context_diagram.png"
+                ),
+                "container": PosixPath(
+                    f"/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/container_diagram.png"
+                ),
+                "c4_component": PosixPath(
+                    f"/Users/kritikadatar/PycharmProjects/ICRQE/src/backend/.repositories/{repo_name}/diagrams/c4_component_diagram.png"
+                ),
+            },
         }
 
     changed_files = None
-
 
     parquet_path = repo_path / "embeddings.parquet"
 
     parser = RepositoryParser(repo_path)
     parser.extract_code_structure(changed_files)
     asyncio.run(process_embeddings_async(repo_name, parquet_path, changed_files))
-
 
     diagrams = generate_diagrams(repo_path)
 
@@ -225,14 +261,11 @@ def ask_question(input_data: QuestionInput):
     repo_name = input_data.repo_name.replace("-", "_")
     repo_path = REPO_BASE_PATH / repo_name
 
-
     validate_repo_metadata(repo_path)
-
 
     collection = chroma_client.get_collection(repo_name)
     if not collection:
         raise HTTPException(status_code=404, detail="ChromaDB collection not found.")
-
 
     qa_processor = QAProcessor(collection, input_data.openai_key, repo_path)
     answer = qa_processor.answer_question(input_data.question)
@@ -242,4 +275,5 @@ def ask_question(input_data: QuestionInput):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

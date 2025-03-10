@@ -77,6 +77,42 @@ export default function RepoQABot() {
 
       {/* Diagrams Section */}
       <div className="mt-10 space-y-10">
+        {diagrams.context && (
+          <div className="text-center">
+            <p className="font-bold text-3xl mb-4">Context Diagram</p>
+            <img
+              src={`http://localhost:8000/diagrams/${diagrams.context.split("/").pop()}`}
+              alt="Context Diagram"
+              className="mx-auto border shadow-lg rounded-lg"
+              style={{ maxWidth: "100%", maxHeight: "600px" }}
+            />
+          </div>
+        )}
+
+        {diagrams.container && (
+          <div className="text-center">
+            <p className="font-bold text-3xl mb-4">Container Diagram</p>
+            <img
+              src={`http://localhost:8000/diagrams/${diagrams.container.split("/").pop()}`}
+              alt="Container Diagram"
+              className="mx-auto border shadow-lg rounded-lg"
+              style={{ maxWidth: "100%", maxHeight: "600px" }}
+            />
+          </div>
+        )}
+
+        {diagrams.c4_component && (
+          <div className="text-center">
+            <p className="font-bold text-3xl mb-4">C4_Container Diagram</p>
+            <img
+              src={`http://localhost:8000/diagrams/${diagrams.c4_component.split("/").pop()}`}
+              alt="C4 Component Diagram"
+              className="mx-auto border shadow-lg rounded-lg"
+              style={{ maxWidth: "100%", maxHeight: "600px" }}
+            />
+          </div>
+        )}
+
         {diagrams.class && (
           <div className="text-center">
             <p className="font-bold text-3xl mb-4">Class Diagram</p>
@@ -112,6 +148,7 @@ export default function RepoQABot() {
             />
           </div>
         )}
+
       </div>
 
       {/* Ask Question Section */}

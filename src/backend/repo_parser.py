@@ -1,9 +1,25 @@
 import ast
 import re
 from pathlib import Path
+
 import pandas as pd
 
-SUPPORTED_EXTENSIONS = {".py", ".txt", ".yaml", ".yml", ".sh", ".md", ".toml", ".java", ".js", ".cpp", ".hpp", ".h", ".c", ".cs"}
+SUPPORTED_EXTENSIONS = {
+    ".py",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".sh",
+    ".md",
+    ".toml",
+    ".java",
+    ".js",
+    ".cpp",
+    ".hpp",
+    ".h",
+    ".c",
+    ".cs",
+}
 
 
 def _parse_python_file(file_path, embedding_data):
@@ -64,8 +80,10 @@ def _parse_other_languages(file_path, embedding_data):
 
         file_hash = hash(str(file_path))
 
-        class_pattern = re.compile(r'class\s+(\w+)\s*[{|:]')
-        function_pattern = re.compile(r'(public|private|protected)?\s*\w+[<>]*\s+(\w+)\s*\(.*\)\s*[{|;]')
+        class_pattern = re.compile(r"class\s+(\w+)\s*[{|:]")
+        function_pattern = re.compile(
+            r"(public|private|protected)?\s*\w+[<>]*\s+(\w+)\s*\(.*\)\s*[{|;]"
+        )
 
         for i, line in enumerate(code):
             class_match = class_pattern.search(line)
@@ -117,7 +135,9 @@ class RepositoryParser:
         embedding_data = []
 
         if changed_files:
-            files_to_process = [self.repo_path / file for file in changed_files if file.endswith(".py")]
+            files_to_process = [
+                self.repo_path / file for file in changed_files if file.endswith(".py")
+            ]
         else:
             files_to_process = list(self.repo_path.rglob("*.py"))
 

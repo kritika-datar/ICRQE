@@ -3,6 +3,7 @@ from sentence_transformers import SentenceTransformer
 
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
+
 class QAProcessor:
     def __init__(self, collection, openai_key, repo_path):
         self.collection = collection
@@ -10,23 +11,16 @@ class QAProcessor:
         self.client = openai.OpenAI(api_key=openai_key)
         self.repo_path = repo_path
 
-
     def answer_question(self, question):
         query_embedding = embedding_model.encode(question).tolist()
 
-        results = self.collection.query(
-            query_embeddings=[query_embedding], n_results=3
-        )
+        results = self.collection.query(query_embeddings=[query_embedding], n_results=3)
 
         metadata_list = results.get("metadatas", [[]])
-        metadata_flat = [
-            meta for sublist in metadata_list for meta in sublist if meta
-        ]
+        metadata_flat = [meta for sublist in metadata_list for meta in sublist if meta]
 
         documents = results.get("documents", [[]])
-        documents_flat = [
-            doc for sublist in documents for doc in sublist if doc
-        ]
+        documents_flat = [doc for sublist in documents for doc in sublist if doc]
 
         if metadata_flat and documents_flat:
             context_snippets = []
